@@ -25,8 +25,18 @@ class YoutubeDownload(BaseDownloader):
     @staticmethod
     def get_format(m):
         return [
-            f"bestvideo[ext=mp4][height={m}]+bestaudio[ext=m4a]",
-            f"bestvideo[vcodec^=avc][height={m}]+bestaudio[acodec^=mp4a]/best[vcodec^=avc]/best",
+            # Try to get video at or below specified height with audio
+            f"bestvideo[ext=mp4][height<={m}][vcodec!*=av01][vcodec!*=vp9]+bestaudio[ext=m4a]",
+            f"bestvideo[ext=mp4][height<={m}]+bestaudio[ext=m4a]",
+            f"bestvideo[height<={m}][vcodec^=avc]+bestaudio[acodec^=mp4a]",
+            f"bestvideo[height<={m}]+bestaudio",
+            # Try single file formats with height limit
+            f"best[height<={m}][ext=mp4]",
+            f"best[height<={m}][vcodec^=avc]",
+            f"best[height<={m}]",
+            # Fallback without height restriction
+            "best[ext=mp4]",
+            "best",
         ]
 
     def _setup_formats(self) -> list | None:
@@ -38,10 +48,21 @@ class YoutubeDownload(BaseDownloader):
         # format: audio, video, document
         formats = []
         defaults = [
-            # webm , vp9 and av01 are not streamable on telegram, so we'll extract only mp4
-            "bestvideo[ext=mp4][vcodec!*=av01][vcodec!*=vp09]+bestaudio[ext=m4a]/bestvideo+bestaudio",
-            "bestvideo[vcodec^=avc]+bestaudio[acodec^=mp4a]/best[vcodec^=avc]/best",
-            None,
+            # Try to get best mp4 video (excluding av01/vp9) with m4a audio
+            "bestvideo[ext=mp4][vcodec!*=av01][vcodec!*=vp9]+bestaudio[ext=m4a]",
+            # Try any mp4 video with m4a audio
+            "bestvideo[ext=mp4]+bestaudio[ext=m4a]",
+            # Try avc codec video with mp4a audio
+            "bestvideo[vcodec^=avc]+bestaudio[acodec^=mp4a]",
+            # Try any video + audio combination
+            "bestvideo+bestaudio",
+            # Try best single file format (should catch format 18 from the example)
+            "best[ext=mp4]",
+            "best[vcodec^=avc]", 
+            # Try specific good formats that commonly exist
+            "18",  # Common 360p mp4 format
+            "22",  # Common 720p mp4 format
+            "best",  # Ultimate fallback - any format
         ]
         audio = AUDIO_FORMAT or "m4a"
         maps = {
@@ -127,13 +148,45 @@ class YoutubeDownload(BaseDownloader):
             formats = ["source"] + formats
 
         files = None
-        for f in formats:
-            ydl_opts["format"] = f
-            logging.info("yt-dlp options: %s", ydl_opts)
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                ydl.download([self._url])
-            files = list(Path(self._tempdir.name).glob("*"))
-            break
+        # Filter out None values from formats and log the format list
+        valid_formats = [f for f in formats if f is not None]
+        logging.info("Starting download with %d format options: %s", len(valid_formats), valid_formats)
+        
+        for i, f in enumerate(valid_formats, 1):
+            try:
+                ydl_opts["format"] = f
+                logging.info("Attempt %d/%d: Trying format: %s", i, len(valid_formats), f)
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    ydl.download([self._url])
+                files = list(Path(self._tempdir.name).glob("*"))
+                if files:  # Only break if we actually got files
+                    logging.info("✓ Successfully downloaded with format: %s (got %d files)", f, len(files))
+                    break
+                else:
+                    logging.warning("Format %s completed but no files found", f)
+            except yt_dlp.utils.DownloadError as e:
+                logging.warning("✗ Format %s failed with DownloadError: %s", f, str(e))
+                continue
+            except Exception as e:
+                logging.error("✗ Format %s failed with unexpected error: %s", f, str(e))
+                continue
+        
+        # Try with no format specified as last resort
+        if not files:
+            try:
+                ydl_opts.pop("format", None)  # Remove format specification
+                logging.info("Final attempt: Trying download with no format specification (yt-dlp default)")
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    ydl.download([self._url])
+                files = list(Path(self._tempdir.name).glob("*"))
+                if files:
+                    logging.info("✓ Successfully downloaded with default format selection (got %d files)", len(files))
+            except Exception as e:
+                logging.error("✗ Final fallback failed: %s", str(e))
+
+        if not files:
+            logging.error("All %d format attempts failed for URL: %s", len(valid_formats) + 1, self._url)
+            raise yt_dlp.utils.DownloadError("All format options failed")
 
         return files
 
