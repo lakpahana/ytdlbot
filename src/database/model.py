@@ -112,7 +112,7 @@ def get_quality_settings(tgid) -> Literal["high", "medium", "low", "audio", "cus
         if user and user.settings:
             return user.settings.quality
 
-        return "high"
+        return "medium"
 
 
 def get_format_settings(tgid) -> Literal["video", "audio", "document"]:
