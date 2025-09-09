@@ -354,7 +354,7 @@ def check_link(url: str):
         return "m3u8 links are disabled."
 
 
-@app.on_message(filters.incoming & filters.text & ~filters.command())
+@app.on_message(filters.incoming & filters.text)
 @private_use
 def download_handler(client: Client, message: types.Message):
     chat_id = message.from_user.id
